@@ -339,6 +339,31 @@ class Handles(commands.Cog):
         if role_to_assign is not None and role_to_assign not in member.roles:
             await member.add_roles(role_to_assign, reason=reason)
 
+    @staticmethod
+    async def update_member_notif_role(member, user, notif_roles, *, reason):
+        if not any(role.name == 'cf-remind' for role in member.roles):
+            return
+
+        division = 0
+        if user.rating >= 2100:
+            division = 1            
+        elif user.rating >= 1600:
+            division = 2
+        elif user.rating >= 1400:
+            division = 3
+        else:
+            division = 4
+
+        role_names_to_remove = {f'cf-remind-div{i}' for i in range(1, 5)}
+        role_names_to_remove.remove(f'cf-remind-div{division}')
+        to_remove = [role for role in member.roles if role.name in role_names_to_remove]
+        if to_remove:
+            await member.remove_roles(*to_remove, reason=reason)
+        
+        role_to_assign = notif_roles[division - 1]
+        if role_to_assign is not None and role_to_assign not in member.roles:
+            await member.add_roles(role_to_assign, reason=reason)
+
     @handle.command(brief='Set Codeforces handle of a user', aliases=["link"])
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def set(self, ctx, member: discord.Member, handle: str):
@@ -615,9 +640,13 @@ class Handles(commands.Cog):
             plural = 's' if len(missing_roles) > 1 else ''
             raise HandleCogError(f'Role{plural} for rank{plural} {roles_str} not present in the server')
 
+        notif_roles = tuple(guild.get_role(int(role_id)) for role_id in constants.CF_REMIND_ROLES)
+
         for member, user in zip(members, users):
             role_to_assign = None if user.rank == cf.UNRATED_RANK else rank2role[user.rank.title]
             await self.update_member_rank_role(member, role_to_assign,
+                                               reason='Codeforces rank update')
+            await self.update_member_notif_role(member, user, notif_roles,
                                                reason='Codeforces rank update')
 
     @staticmethod

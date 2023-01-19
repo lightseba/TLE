@@ -73,7 +73,7 @@ def _get_embed_fields_from_contests(contests):
     return fields
 
 
-async def _send_reminder_at(channel, role, contests, before_secs, send_time):
+async def _send_reminder_at(channel, notif_roles, contests, before_secs, send_time):
     delay = send_time - time.time()
     if delay <= 0:
         return
@@ -88,9 +88,20 @@ async def _send_reminder_at(channel, role, contests, before_secs, send_time):
     before_str = ' '.join(make(value, label) for label, value in zip(labels, values) if value > 0)
     desc = f'About to start in {before_str}'
     embed = discord_common.cf_color_embed(description=desc)
+    contest_div = 5
     for name, value in _get_embed_fields_from_contests(contests):
         embed.add_field(name=name, value=value)
-    await channel.send(role.mention, embed=embed)
+        for i in range(1, 5):
+            if f'Div. {i}' in name:
+                contest_div = min(contest_div, i)
+
+    # Good Bye 2022, Hello 2023, etc. are rated for all
+    if contest_div == 5:
+        contest_div = 1
+
+    mention_str = ' '.join(notif_roles[i].mention for i in range(contest_div-1, 4))
+
+    await channel.send(mention_str, embed=embed)
 
 
 def _get_ongoing_vc_participants():
@@ -169,11 +180,12 @@ class Contests(commands.Cog):
         channel_id, role_id, before = int(channel_id), int(role_id), json.loads(before)
         guild = self.bot.get_guild(guild_id)
         channel, role = guild.get_channel(channel_id), guild.get_role(role_id)
+        notif_roles = self._get_remind_notif_roles(guild)
         for start_time, contests in self.start_time_map.items():
             for before_mins in before:
                 before_secs = 60 * before_mins
                 task = asyncio.create_task(
-                    _send_reminder_at(channel, role, contests, before_secs, start_time - before_secs))
+                    _send_reminder_at(channel, notif_roles, contests, before_secs, start_time - before_secs))
                 self.task_map[guild_id].append(task)
         self.logger.info(f'{len(self.task_map[guild_id])} tasks scheduled for guild {guild_id}')
 
@@ -289,10 +301,24 @@ class Contests(commands.Cog):
         settings.
         """
         role = self._get_remind_role(ctx.guild)
-        if role in ctx.author.roles:
+        notif_roles = tuple(ctx.guild.get_role(int(role_id)) for role_id in constants.CF_REMIND_ROLES)
+        user = cf_common.user_db.get_handle(ctx.author.id, ctx.guild.id)
+        if user is None:
+            embed = discord_common.embed_neutral('You have not yet set your Codeforces handle')
+        elif role in ctx.author.roles:
             embed = discord_common.embed_neutral('You are already subscribed to contest reminders')
         else:
-            await ctx.author.add_roles(role, reason='User subscribed to contest reminders')
+            division = 0
+            if user.rating >= 2100:
+                division = 1            
+            elif user.rating >= 1600:
+                division = 2
+            elif user.rating >= 1400:
+                division = 3
+            else:
+                division = 4
+
+            await ctx.author.add_roles(role, notif_roles[division-1], reason='User subscribed to contest reminders')
             embed = discord_common.embed_success('Successfully subscribed to contest reminders')
         await ctx.send(embed=embed)
 
@@ -300,10 +326,12 @@ class Contests(commands.Cog):
     async def off(self, ctx):
         """Unsubscribes you from contest reminders."""
         role = self._get_remind_role(ctx.guild)
+        notif_roles = tuple(ctx.guild.get_role(int(role_id)) for role_id in constants.CF_REMIND_ROLES)
         if role not in ctx.author.roles:
             embed = discord_common.embed_neutral('You are not subscribed to contest reminders')
         else:
-            await ctx.author.remove_roles(role, reason='User unsubscribed from contest reminders')
+            to_remove = [role] + [div_role for div_role in notif_roles if div_role in ctx.author.roles]
+            await ctx.author.remove_roles(*to_remove, reason='User unsubscribed from contest reminders')
             embed = discord_common.embed_success('Successfully unsubscribed from contest reminders')
         await ctx.send(embed=embed)
 
